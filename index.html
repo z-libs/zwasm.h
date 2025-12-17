@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ZDK Bare Metal WASM</title>
+    <style>
+        body {
+            background-color: #1e1e1e;
+            color: #d4d4d4;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+        }
+        h1 { color: #569cd6; }
+        
+        /* The Status Bar (Targeted by C code) */
+        #status-bar {
+            padding: 15px;
+            margin-bottom: 20px;
+            border-radius: 5px;
+            font-weight: bold;
+            font-size: 1.2em;
+            background-color: #333;
+            border-left: 5px solid #ff0000; /* Red initially */
+            color: #ffaaaa;
+        }
+
+        /* Container for DOM elements created by C */
+        #app {
+            margin-bottom: 20px;
+        }
+
+        /* On-screen Console */
+        #console-output {
+            background-color: #000;
+            border: 1px solid #444;
+            padding: 10px;
+            font-family: 'Consolas', 'Monaco', monospace;
+            height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+        .log { color: #d4d4d4; }
+        .warn { color: #dcdcaa; }
+        .err { color: #f44747; }
+        .sys { color: #569cd6; font-style: italic; }
+    </style>
+</head>
+<body>
+
+    <h1>ZDK Bare Metal Runner</h1>
+
+    <div id="status-bar">Waiting for WebAssembly...</div>
+
+    <div id="app"></div>
+
+    <div id="console-output"></div>
+
+    <script>
+        // Helper to display logs on screen
+        const outputDiv = document.getElementById('console-output');
+        function printToScreen(msg, type) {
+            const el = document.createElement('div');
+            el.className = type;
+            el.textContent = `[${type.toUpperCase()}] ${msg}`;
+            outputDiv.appendChild(el);
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+            
+            if (type === 'err') console.error(msg);
+            else if (type === 'warn') console.warn(msg);
+            else console.log(msg);
+        }
+
+        // Helper to read C Strings from WASM Memory
+        let wasmMemory;
+        const decoder = new TextDecoder('utf-8');
+
+        function readString(ptr, len) {
+            if (!wasmMemory) return "Error: Memory not loaded";
+            const bytes = new Uint8Array(wasmMemory.buffer, ptr, len);
+            return decoder.decode(bytes);
+        }
+
+        // The "Imports" Object (Matches zwasm.h definitions)
+        const importObject = {
+            env: {
+                js_log: (ptr, len) => printToScreen(readString(ptr, len), 'log'),
+                js_warn: (ptr, len) => printToScreen(readString(ptr, len), 'warn'),
+                js_err: (ptr, len) => printToScreen(readString(ptr, len), 'err'),
+                
+                js_time: () => performance.now(),
+                js_rand: () => Math.random(),
+                
+                js_eval: (ptr, len) => {
+                    const code = readString(ptr, len);
+                    // printToScreen(`Eval: "${code}"`, 'sys'); // Optional: noisy if running animation
+                    try {
+                        (0, eval)(code);
+                    } catch (e) {
+                        printToScreen("Eval Error: " + e.message, 'err');
+                    }
+                },
+
+                // --- CANVAS STUBS ---
+                // FIX: Required even if unused, otherwise LinkError occurs
+                js_canvas_rect: (x, y, w, h) => {},
+                js_canvas_style: (ptr, len) => {},
+                js_canvas_clear: () => {}
+            }
+        };
+
+        // Load and Run the WASM
+        (async () => {
+            try {
+                printToScreen("Fetching test_zwasm.wasm...", "sys");
+                
+                const response = await fetch('test_zwasm.wasm');
+                if (!response.ok) throw new Error(`HTTP Error ${response.status}`);
+
+                const buffer = await response.arrayBuffer();
+                const results = await WebAssembly.instantiate(buffer, importObject);
+                const instance = results.instance;
+
+                // Grab memory reference
+                wasmMemory = instance.exports.memory;
+
+                printToScreen("WASM Loaded. Executing main()...", "sys");
+
+                if (instance.exports.main) {
+                    const ret = instance.exports.main();
+                    printToScreen(`Main exited with code: ${ret}`, "sys");
+                    
+                    const sb = document.getElementById('status-bar');
+                    sb.style.borderColor = '#00ff00';
+                    sb.style.color = '#aaffaa';
+                    if (sb.innerHTML.includes("Waiting")) sb.innerHTML = "WASM Loaded Successfully";
+                } else {
+                    printToScreen("Error: 'main' function not found.", "err");
+                }
+
+                if (instance.exports.on_frame) {
+                    printToScreen("Animation loop detected. Starting...", "sys");
+                    
+                    let boxElement = null;
+
+                    const loop = () => {
+                        // -> Run C Logic (Physics/Math)
+                        instance.exports.on_frame();
+
+                        // -> Render Sync (Logic -> DOM)
+                        if (instance.exports.get_x && instance.exports.get_y) 
+                        {
+                            if (!boxElement) boxElement = document.getElementById('box');
+                            
+                            if (boxElement) {
+                                const x = instance.exports.get_x();
+                                const y = instance.exports.get_y();
+                                boxElement.style.left = x + 'px';
+                                boxElement.style.top = y + 'px';
+                            }
+                        }
+
+                        requestAnimationFrame(loop);
+                    };
+                    requestAnimationFrame(loop);
+                }
+
+            } catch (err) {
+                printToScreen(err.message, "err");
+                console.error(err);
+            }
+        })();
+    </script>
+</body>
+</html>
