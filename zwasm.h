@@ -128,7 +128,7 @@ bool zwasm_key_down(int key_code)
     }
     void *memset(void *d, int v, size_t n) 
     { 
-        unsigned char *p = d; 
+        unsigned char *p = (unsigned char *)d; 
         while(n--) 
         {
             *p++=v; 
@@ -138,8 +138,8 @@ bool zwasm_key_down(int key_code)
 
     void *memcpy(void *d, const void *s, size_t n) 
     {
-        char *dp = d;
-        const char *sp = s; 
+        char *dp = (char *)d;
+        const char *sp = (const char *)s; 
         while(n--) 
         {
             *dp++=*sp++; 

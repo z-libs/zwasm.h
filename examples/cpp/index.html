@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ZDK Game</title>
+    <style>
+        body { background: #111; color: #eee; font-family: monospace; display: flex; flex-direction: column; align-items: center; }
+        canvas { background: #000; border: 2px solid #333; box-shadow: 0 0 20px rgba(0,0,0,0.5); }
+        #status { margin-top: 10px; color: #888; }
+    </style>
+</head>
+<body>
+
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+    <div id="status">Loading...</div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const status = document.getElementById('status');
+
+        // Helper to read C strings from Wasm Memory
+        function readString(buffer, ptr) {
+            const memory = new Uint8Array(buffer);
+            let end = ptr;
+            while (memory[end] !== 0) end++; 
+            return new TextDecoder().decode(memory.subarray(ptr, end));
+        }
+
+        // THE GLUE (Mapping C functions to JS)
+        const imports = {
+            env: {
+                // System
+                js_log: (ptr, len) => console.log("C LOG:", readString(wasmMemory.buffer, ptr)),
+                js_time: () => performance.now(),
+                js_rand: () => Math.random(),
+                js_eval: (ptr, len) => { /* Security risk: disabled for this demo */ },
+
+                // Graphics
+                js_canvas_clear: () => ctx.clearRect(0, 0, canvas.width, canvas.height),
+                js_canvas_style: (ptr, len) => ctx.fillStyle = readString(wasmMemory.buffer, ptr),
+                js_canvas_rect: (x, y, w, h) => ctx.fillRect(x, y, w, h),
+            }
+        };
+
+        let wasmMemory;
+        let wasmExports;
+
+        // --- THE "LAZY" LOADER ---
+        // 1. Fetch the file
+        fetch('game.wasm')
+            // 2. Turn it into a raw buffer (ignores MIME type)
+            .then(response => response.arrayBuffer())
+            // 3. Compile the buffer manually
+            .then(bytes => WebAssembly.instantiate(bytes, imports))
+            .then(result => {
+                wasmExports = result.instance.exports;
+                wasmMemory = wasmExports.memory;
+
+                // Run C++ main
+                if (wasmExports.main) {
+                    console.log("Running main()...");
+                    wasmExports.main();
+                }
+
+                status.innerText = "Running (60 FPS)";
+
+                // Start Game Loop
+                function loop() {
+                    wasmExports.on_frame(); 
+                    requestAnimationFrame(loop);
+                }
+                requestAnimationFrame(loop);
+            })
+            .catch(err => {
+                status.innerText = "Error: " + err;
+                console.error(err);
+            });
+    </script>
+</body>
+</html>
